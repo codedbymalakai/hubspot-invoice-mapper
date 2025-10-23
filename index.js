@@ -13,25 +13,25 @@ const ACCESS_TOKEN = process.env["ACCESS_TOKEN"];
 // Main Function
 async function handleInvoiceSync(invoiceId) {
   try {
-    // Get Invoice id
+    // Get Company id
     const associatedCompanyID = await getInvoiceData(invoiceId);
     if (!associatedCompanyID) return;
 
     // Get Company + associated Services
     const companyData = await getCompany(associatedCompanyID);
     const servicesArray = companyData?.data?.associations?.services?.results || [];
-    console.log("This is the services Array ", servicesArray);
-    for (let i = 0; i < servicesArray.length; i++) {
-            const serviceId = servicesArray[i].id;
-            console.log(`This is the ${[i]} service`)
+    if (servicesArray.length === 0) return;
 
-            await getServiceData(serviceId)
-    }
+
+    console.log("This is the services Array ", servicesArray);
 
     // Handle mapping logic
     if (servicesArray.length === 1) {
       console.log(`Only one service found - automatically associating...`);
-      await associateInvoiceWithService(invoiceId, servicesArray[0].id);
+      const serviceId = servicesArray[0].id;
+      console.log(serviceId);
+      const dealId = await getServiceData(serviceId);
+      await associateInvoiceWithDeal(invoiceId, dealId);
     } else {
       console.log(`Multiple services found, applying matching logic...`);
       await findMatchingService(invoiceId, servicesArray);
@@ -39,6 +39,7 @@ async function handleInvoiceSync(invoiceId) {
   } catch (error) {
     console.error("Workflow failed:", error.response?.data || error.message);
   }
+  
 }
 
 
@@ -58,6 +59,8 @@ async function getInvoiceData(id) {
 
     console.log("Invoice Data:", JSON.stringify(invoiceResponse.data, null, 2));
 
+
+    // What if multiple company ids
     const associatedCompanyID =
       invoiceResponse.data.associations?.companies?.results?.[0]?.id;
 
@@ -94,28 +97,54 @@ async function getCompany (id) {
 
 async function getServiceData (id) {
     try {
-        const serviceResponse = await axios.get(`${readService}${id}`, {
+        const serviceResponse = await axios.get(`${readService}${id}?associations=deals`, {
             headers: {
                 Authorization: `Bearer ${ACCESS_TOKEN}`,
                 "Content-Type": "application/json" 
             },
         });
 
+        // What if multiple deals
         console.log(JSON.stringify(serviceResponse.data, null, 2));
-        return serviceResponse.data;
+        return serviceResponse.data.associations?.deals?.results?.[0]?.id;
     } catch (error) {
         console.error("Could not find any services: ", error);
     };
 };
 
 
-async function associateInvoiceWithService (invoiceId, serviceId) {
-  try {
-    console.log("Successfully Associated Invoice with Service");
-  } catch (error) {
-    console.error("Unsuccessful association", error);
-  };
-  
+async function associateInvoiceWithDeal (invoiceId, dealId) {
+
+  async function getAssociationType () {
+    try {
+
+      const typeResponse = await axios.get(`https://api.hubapi.com/crm/v4/associations/invoice/deal/labels`, {
+        headers: {
+          Authorization: `Bearer ${ACCESS_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+      });
+
+      return typeResponse.data.results[0]?.typeId;
+
+    } catch (error) {
+      console.error("Type not found", error.message);
+    }
+  }
+
+  const typeId = await getAssociationType();
+
+  const assoResponse = await axios.put(
+    `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}/associations/deals/${dealId}/${typeId}`, 
+    {},
+    {
+      headers: {
+        Authorization: `Bearer ${ACCESS_TOKEN}`,
+        "Content-Type": "application/json" 
+      },
+    })
+
+  console.log(JSON.stringify(assoResponse.data, null, 2))
 };
 
 async function findMatchingService (invoiceId, servicesArray) {
